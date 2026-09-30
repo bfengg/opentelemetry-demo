@@ -75,6 +75,7 @@ var (
 )
 
 const emailRequestTimeout = time.Second
+const chargeRetryBackoff = 200 * time.Millisecond
 
 func initResource() *sdkresource.Resource {
 	initResourcesOnce.Do(func() {
@@ -578,10 +579,16 @@ func (cs *checkout) chargeCard(ctx context.Context, amount *pb.Money, paymentInf
 		paymentService = pb.NewPaymentServiceClient(c)
 	}
 
-	paymentResp, err := paymentService.Charge(ctx, &pb.ChargeRequest{
+	request := &pb.ChargeRequest{
 		Amount:     amount,
 		CreditCard: paymentInfo,
-	})
+	}
+	paymentResp, err := paymentService.Charge(ctx, request)
+	if status.Code(err) == codes.Unavailable {
+		logger.Warn("charge failed, retrying")
+		time.Sleep(chargeRetryBackoff)
+		paymentResp, err = paymentService.Charge(ctx, request)
+	}
 	if err != nil {
 		return "", fmt.Errorf("could not charge the card: %+v", err)
 	}
