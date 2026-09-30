@@ -7,6 +7,7 @@
 # Python
 import os
 import random
+import time
 from concurrent import futures
 
 # Pip
@@ -38,6 +39,25 @@ from metrics import (
 
 cached_ids = []
 first_run = True
+
+
+class CatalogCache:
+    """Keeps recent ListProducts responses so recommendations skip a catalog round trip."""
+
+    def __init__(self, ttl_seconds=30):
+        self.ttl_seconds = ttl_seconds
+        self.snapshots = []
+        self.refreshed_at = 0.0
+
+    def product_ids(self):
+        if time.monotonic() - self.refreshed_at > self.ttl_seconds:
+            cat_response = product_catalog_stub.ListProducts(demo_pb2.Empty())
+            self.snapshots.append([x.id for x in cat_response.products])
+            self.refreshed_at = time.monotonic()
+        return self.snapshots[-1]
+
+
+catalog_cache = CatalogCache()
 
 class RecommendationService(demo_pb2_grpc.RecommendationServiceServicer):
     def ListRecommendations(self, request, context):
@@ -92,8 +112,7 @@ def get_product_list(request_product_ids):
                 product_ids = cached_ids
         else:
             span.set_attribute("demo.feature_flag.recommendation_cache", False)
-            cat_response = product_catalog_stub.ListProducts(demo_pb2.Empty())
-            product_ids = [x.id for x in cat_response.products]
+            product_ids = catalog_cache.product_ids()
 
         span.set_attribute("demo.product.count", len(product_ids))
 
